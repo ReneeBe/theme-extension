@@ -47,7 +47,20 @@ export default function Popup() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab?.id) {
-        await chrome.tabs.sendMessage(tab.id, { type: "APPLY_THEME", vars: theme });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (vars: Record<string, string>) => {
+            const css = `:root {\n${Object.entries(vars).map(([k, v]) => `  ${k}: ${v};`).join("\n")}\n}`;
+            let style = document.getElementById("theme-extension-styles") as HTMLStyleElement | null;
+            if (!style) {
+              style = document.createElement("style");
+              style.id = "theme-extension-styles";
+              document.head.appendChild(style);
+            }
+            style.textContent = css;
+          },
+          args: [theme as Record<string, string>],
+        });
         setApplied(true);
       }
     } catch (e) {
