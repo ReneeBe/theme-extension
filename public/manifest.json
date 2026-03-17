@@ -3,7 +3,7 @@
   "name": "Theme Generator",
   "version": "0.1.0",
   "description": "Inject AI-generated themes into any website",
-  "permissions": ["activeTab"],
+  "permissions": ["activeTab", "storage"],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

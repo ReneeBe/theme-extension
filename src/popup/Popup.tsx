@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useThemeGenerator } from "../hooks/useThemeGenerator";
 import ApiKeyInputs from "../components/ApiKeyInputs";
 import ThemePreview from "../components/ThemePreview";
@@ -13,6 +13,22 @@ export default function Popup() {
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [workerUrl, setWorkerUrl] = useState("");
   const [keysExpanded, setKeysExpanded] = useState(false);
+
+  // Load persisted keys on mount
+  useEffect(() => {
+    chrome.storage.local.get(["geminiApiKey", "anthropicApiKey", "workerUrl"], (result) => {
+      if (result.geminiApiKey) setGeminiApiKey(result.geminiApiKey);
+      if (result.anthropicApiKey) setAnthropicApiKey(result.anthropicApiKey);
+      if (result.workerUrl) setWorkerUrl(result.workerUrl);
+    });
+  }, []);
+
+  function handleKeyChange(field: "geminiApiKey" | "anthropicApiKey" | "workerUrl", value: string) {
+    if (field === "geminiApiKey") setGeminiApiKey(value);
+    else if (field === "anthropicApiKey") setAnthropicApiKey(value);
+    else setWorkerUrl(value);
+    chrome.storage.local.set({ [field]: value });
+  }
   const [copied, setCopied] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -119,11 +135,7 @@ export default function Popup() {
           geminiApiKey={geminiApiKey}
           anthropicApiKey={anthropicApiKey}
           workerUrl={workerUrl}
-          onChange={(field, value) => {
-            if (field === "geminiApiKey") setGeminiApiKey(value);
-            else if (field === "anthropicApiKey") setAnthropicApiKey(value);
-            else setWorkerUrl(value);
-          }}
+          onChange={handleKeyChange}
           expanded={keysExpanded}
           onToggle={() => setKeysExpanded((v) => !v)}
         />
