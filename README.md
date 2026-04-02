@@ -4,7 +4,7 @@
 
 A Chrome extension that injects AI-generated CSS themes into any webpage with one click. Describe a visual mood — *"neon tokyo rainstorm"*, *"dusty 70s paperback"* — and the extension generates a full set of CSS custom properties (colors, gradients, glassmorphism values, fonts, background patterns) and applies them live to the active tab.
 
-> **Chrome Store submission is pending review.** In the meantime, you can install it manually from source (see below).
+**[Install from the Chrome Web Store →](https://chromewebstore.google.com/detail/theme-generator/nmbpjgbbogokabhnmkonpgfeglebeidi)**
 
 ## Features
 
