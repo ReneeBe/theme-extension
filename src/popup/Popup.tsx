@@ -2,6 +2,9 @@ import { useState, useEffect } from "react";
 import { useThemeGenerator } from "../hooks/useThemeGenerator";
 import ApiKeyInputs from "../components/ApiKeyInputs";
 import ThemePreview from "../components/ThemePreview";
+import SavedThemes from "../components/SavedThemes";
+import type { SavedTheme } from "../types/theme";
+import { buildThemeCss } from "../utils/buildThemeCss";
 
 const EXAMPLES = ["ocean at dusk", "retro 80s arcade", "neon tokyo rainstorm", "lisa frank maximalist"];
 const PATTERN_EXAMPLES = ["leopard print", "polka dots", "diagonal stripes"];
@@ -13,13 +16,38 @@ export default function Popup() {
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
   const [workerUrl, setWorkerUrl] = useState("");
   const [keysExpanded, setKeysExpanded] = useState(false);
+  const [savedExpanded, setSavedExpanded] = useState(false);
+  const [magicLinkToken, setMagicLinkToken] = useState<string | null>(null);
 
-  // Load persisted keys on mount
+  // Saved themes state
+  const [savedThemes, setSavedThemes] = useState<SavedTheme[]>([]);
+  const [siteThemes, setSiteThemes] = useState<Record<string, string>>({});
+  const [currentHostname, setCurrentHostname] = useState<string | null>(null);
+
+  // Save theme UI
+  const [saveName, setSaveName] = useState("");
+  const [showSaveInput, setShowSaveInput] = useState(false);
+
+  // Load persisted state on mount
   useEffect(() => {
-    chrome.storage.local.get(["geminiApiKey", "anthropicApiKey", "workerUrl"], (result) => {
-      if (result.geminiApiKey) setGeminiApiKey(result.geminiApiKey);
-      if (result.anthropicApiKey) setAnthropicApiKey(result.anthropicApiKey);
-      if (result.workerUrl) setWorkerUrl(result.workerUrl);
+    chrome.storage.local.get(
+      ["geminiApiKey", "anthropicApiKey", "workerUrl", "savedThemes", "siteThemes", "magiclink_token"],
+      (result) => {
+        if (result.geminiApiKey) setGeminiApiKey(result.geminiApiKey);
+        if (result.anthropicApiKey) setAnthropicApiKey(result.anthropicApiKey);
+        if (result.workerUrl) setWorkerUrl(result.workerUrl);
+        if (result.savedThemes) setSavedThemes(result.savedThemes);
+        if (result.siteThemes) setSiteThemes(result.siteThemes);
+        if (result.magiclink_token) setMagicLinkToken(result.magiclink_token);
+      }
+    );
+
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (tab?.url) {
+        try {
+          setCurrentHostname(new URL(tab.url).hostname);
+        } catch {}
+      }
     });
   }, []);
 
@@ -29,16 +57,19 @@ export default function Popup() {
     else setWorkerUrl(value);
     chrome.storage.local.set({ [field]: value });
   }
+
   const [copied, setCopied] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
 
-  const { status, theme, paletteImage, error, generate, reset } = useThemeGenerator();
+  const { status, theme, paletteImage, error, patternError, generate, reset } = useThemeGenerator();
 
   function handleGenerate() {
     reset();
     setApplied(false);
-    generate(description, { geminiApiKey, anthropicApiKey, workerUrl, backgroundStyle });
+    setShowSaveInput(false);
+    setSaveName("");
+    generate(description, { geminiApiKey, anthropicApiKey, workerUrl, backgroundStyle, ...(magicLinkToken && { magicLinkToken }) });
   }
 
   async function handleApply() {
@@ -47,19 +78,19 @@ export default function Popup() {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab?.id) {
+        const css = buildThemeCss(theme as Record<string, string>);
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          func: (vars: Record<string, string>) => {
-            const css = `:root {\n${Object.entries(vars).map(([k, v]) => `  ${k}: ${v};`).join("\n")}\n}`;
+          func: (cssText: string) => {
             let style = document.getElementById("theme-extension-styles") as HTMLStyleElement | null;
             if (!style) {
               style = document.createElement("style");
               style.id = "theme-extension-styles";
               document.head.appendChild(style);
             }
-            style.textContent = css;
+            style.textContent = cssText;
           },
-          args: [theme as Record<string, string>],
+          args: [css],
         });
         setApplied(true);
       }
@@ -76,6 +107,68 @@ export default function Popup() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
+
+  function handleSaveTheme() {
+    if (!theme || !saveName.trim()) return;
+    const newTheme: SavedTheme = {
+      id: Date.now().toString(),
+      name: saveName.trim(),
+      vars: theme,
+    };
+    const updated = [...savedThemes, newTheme];
+    setSavedThemes(updated);
+    chrome.storage.local.set({ savedThemes: updated });
+    setShowSaveInput(false);
+    setSaveName("");
+    setSavedExpanded(true);
+  }
+
+  function handleApplySaved(saved: SavedTheme) {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+      if (!tab?.id) return;
+      const css = buildThemeCss(saved.vars as Record<string, string>);
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (cssText: string) => {
+          let style = document.getElementById("theme-extension-styles") as HTMLStyleElement | null;
+          if (!style) {
+            style = document.createElement("style");
+            style.id = "theme-extension-styles";
+            document.head.appendChild(style);
+          }
+          style.textContent = cssText;
+        },
+        args: [css],
+      });
+    });
+  }
+
+  function handleDeleteSaved(id: string) {
+    const updated = savedThemes.filter((t) => t.id !== id);
+    setSavedThemes(updated);
+    chrome.storage.local.set({ savedThemes: updated });
+
+    // Also remove site associations pointing to this theme
+    const updatedSites = Object.fromEntries(
+      Object.entries(siteThemes).filter(([, tid]) => tid !== id)
+    );
+    setSiteThemes(updatedSites);
+    chrome.storage.local.set({ siteThemes: updatedSites });
+  }
+
+  function handleToggleSite(id: string) {
+    if (!currentHostname) return;
+    const updatedSites = { ...siteThemes };
+    if (updatedSites[currentHostname] === id) {
+      delete updatedSites[currentHostname];
+    } else {
+      updatedSites[currentHostname] = id;
+    }
+    setSiteThemes(updatedSites);
+    chrome.storage.local.set({ siteThemes: updatedSites });
+  }
+
+  const siteThemeId = currentHostname ? (siteThemes[currentHostname] ?? null) : null;
 
   return (
     <div
@@ -151,6 +244,7 @@ export default function Popup() {
           onChange={handleKeyChange}
           expanded={keysExpanded}
           onToggle={() => setKeysExpanded((v) => !v)}
+          hasMagicLink={!!magicLinkToken}
         />
 
         <button
@@ -180,7 +274,14 @@ export default function Popup() {
       {/* Result */}
       {status === "success" && theme && (
         <div className="flex flex-col gap-2">
-          <ThemePreview theme={theme} paletteImage={paletteImage} onCopy={handleCopy} copied={copied} />
+          <ThemePreview theme={theme} description={description} paletteImage={paletteImage} onCopy={handleCopy} copied={copied} />
+
+          {patternError && (
+            <p className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400">
+              Pattern generation failed: {patternError}
+            </p>
+          )}
+
           <button
             onClick={handleApply}
             disabled={applying}
@@ -193,8 +294,70 @@ export default function Popup() {
           >
             {applying ? "Applying…" : applied ? "✓ Applied to Tab" : "Apply to Current Tab"}
           </button>
+
+          {/* Save theme */}
+          {!showSaveInput ? (
+            <button
+              onClick={() => setShowSaveInput(true)}
+              className="w-full rounded-xl border border-white/8 py-2 text-xs text-white/40 transition-colors hover:border-white/15 hover:text-white/60"
+            >
+              Save Theme…
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                type="text"
+                value={saveName}
+                onChange={(e) => setSaveName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveTheme();
+                  if (e.key === "Escape") setShowSaveInput(false);
+                }}
+                placeholder="Name this theme…"
+                className="min-w-0 flex-1 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-xs text-white/80 placeholder:text-white/20 focus:border-white/15 focus:outline-none"
+              />
+              <button
+                onClick={handleSaveTheme}
+                disabled={!saveName.trim()}
+                className="rounded-xl px-3 py-2 text-xs font-semibold text-white disabled:opacity-40"
+                style={{ background: "linear-gradient(135deg, #f72585, #7209b7)" }}
+              >
+                Save
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Saved Themes */}
+      <div className="rounded-2xl border border-white/8 bg-white/3">
+        <button
+          onClick={() => setSavedExpanded((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-left text-xs font-semibold uppercase tracking-widest text-white/30 transition-colors hover:text-white/50"
+        >
+          <span>Saved Themes {savedThemes.length > 0 && `(${savedThemes.length})`}</span>
+          <span className="text-base leading-none">{savedExpanded ? "−" : "+"}</span>
+        </button>
+
+        {savedExpanded && (
+          <div className="border-t border-white/5 px-3 pb-3 pt-2">
+            {currentHostname && (
+              <p className="mb-2 text-[10px] text-white/25">
+                Current site: <span className="text-white/40">{currentHostname}</span>
+              </p>
+            )}
+            <SavedThemes
+              themes={savedThemes}
+              siteThemeId={siteThemeId}
+              currentHostname={currentHostname}
+              onApply={handleApplySaved}
+              onDelete={handleDeleteSaved}
+              onToggleSite={handleToggleSite}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

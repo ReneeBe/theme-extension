@@ -29,3 +29,9 @@ export type GeneratorConfig = {
 };
 
 export type GenerateStatus = "idle" | "loading" | "success" | "error";
+
+export type SavedTheme = {
+  id: string;
+  name: string;
+  vars: ThemeVars;
+};
